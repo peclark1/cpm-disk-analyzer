@@ -86,7 +86,7 @@ def create_application() -> Any:
             self.header_bar.set_title_widget(self.window_title)
             self.toolbar_view.add_top_bar(self.header_bar)
 
-            self.open_button = Gtk.Button.new_from_icon_name("document-open-symbolic")
+            self.open_button = Gtk.Button(label="Open…")
             self.open_button.set_tooltip_text("Open a disk image")
             self.open_button.connect("clicked", self._choose_image)
             self.header_bar.pack_start(self.open_button)
@@ -479,6 +479,13 @@ def create_application() -> Any:
                 subtitle="Choose an IMG, IMD, DSK, or RAW file. The source will not be modified.",
             )
             row.add_prefix(Gtk.Image.new_from_icon_name("document-open-symbolic"))
+            open_button = Gtk.Button(label="Open…")
+            open_button.set_valign(Gtk.Align.CENTER)
+            open_button.connect("clicked", self._choose_image)
+            row.add_suffix(open_button)
+            # Setting an activatable widget makes clicks anywhere on the row,
+            # plus Enter/Space keyboard activation, invoke the same button.
+            row.set_activatable_widget(open_button)
             self._add_group_row(self.image_group, row)
             self._clear_candidate_details()
 
