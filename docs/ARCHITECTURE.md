@@ -7,7 +7,8 @@
 3. Separate observed facts, deterministic derivations, and interpretations.
 4. Show competing candidates rather than hiding ambiguity.
 5. Add formats declaratively whenever code is not required.
-6. Keep the first release dependency-free outside the Python standard library.
+6. Keep the analysis core and CLI dependency-free outside the Python standard
+   library; use Ubuntu's system GTK4 bindings only for the desktop front end.
 
 ## Components
 
@@ -21,7 +22,10 @@
 - `analyzer.py` calculates the source checksum, coordinates container reading and
   profile scoring, and returns a structured result.
 - `report.py` renders structured results as text or JSON.
-- `cli.py` and `gui.py` are thin front ends over the same analyzer API.
+- `cli.py` and `gui.py` are thin front ends over the same analyzer API. The GUI
+  uses GTK4 and libadwaita for native Ubuntu/GNOME controls, styling, dialogs,
+  dark-mode behavior, and file-manager open integration. GTK is loaded lazily so
+  CLI use remains possible on headless systems.
 
 ## Confidence limitations
 
@@ -60,4 +64,3 @@ test corpus grows.
 - Comparison mode
 - HFE, TD0, and flux-conversion adapters
 - Integration hooks for `imsai-disk-archive`
-
