@@ -66,6 +66,10 @@ def create_application() -> Any:
 
             self.result: ImageResult | None = None
             self.current_path: Path | None = None
+            # Keep asynchronous chooser objects alive until their callbacks
+            # finish. This avoids PyGObject/native-dialog lifetime crashes.
+            self._open_dialog: Any | None = None
+            self._save_dialog: Any | None = None
             self._candidate_rows: list[Any] = []
             self._profile_ids: list[str | None] = [None]
             profile_labels = ["Automatic detection"]
@@ -268,21 +272,21 @@ def create_application() -> Any:
             return scroll
 
         def _choose_image(self, _button: Any) -> None:
-            chooser = Gtk.FileChooserNative(
-                title="Open disk image",
-                transient_for=self,
-                action=Gtk.FileChooserAction.OPEN,
-                accept_label="Open",
-                cancel_label="Cancel",
-            )
+            dialog = Gtk.FileDialog()
+            dialog.set_title("Open disk image")
+            dialog.set_modal(True)
+            dialog.set_accept_label("Open")
             image_filter = Gtk.FileFilter()
             image_filter.set_name("Disk images")
             for pattern in ("*.img", "*.imd", "*.dsk", "*.raw", "*.IMG", "*.IMD"):
                 image_filter.add_pattern(pattern)
-            chooser.add_filter(image_filter)
-            chooser.add_filter(self._all_files_filter(Gtk))
-            chooser.connect("response", self._open_response)
-            chooser.show()
+            filters = Gio.ListStore.new(Gtk.FileFilter)
+            filters.append(image_filter)
+            filters.append(self._all_files_filter(Gtk))
+            dialog.set_filters(filters)
+            dialog.set_default_filter(image_filter)
+            self._open_dialog = dialog
+            dialog.open(self, None, self._open_response)
 
         @staticmethod
         def _all_files_filter(gtk: Any) -> Any:
@@ -291,12 +295,19 @@ def create_application() -> Any:
             file_filter.add_pattern("*")
             return file_filter
 
-        def _open_response(self, chooser: Any, response: int) -> None:
-            if response == Gtk.ResponseType.ACCEPT:
-                selected = chooser.get_file()
-                if selected is not None and selected.get_path():
-                    self.load_path(Path(selected.get_path()))
-            chooser.destroy()
+        def _open_response(self, dialog: Any, result: Any) -> None:
+            try:
+                selected = dialog.open_finish(result)
+            except GLib.Error:
+                # Dismissing the asynchronous dialog is reported as an error.
+                return
+            finally:
+                self._open_dialog = None
+            path = selected.get_path()
+            if path:
+                self.load_path(Path(path))
+            else:
+                self._show_error("Cannot open image", "Please choose a local disk-image file.")
 
         def load_path(self, path: Path) -> None:
             self.current_path = path
@@ -492,34 +503,42 @@ def create_application() -> Any:
         def _choose_export_path(self, _button: Any) -> None:
             if self.result is None:
                 return
-            chooser = Gtk.FileChooserNative(
-                title="Export JSON analysis",
-                transient_for=self,
-                action=Gtk.FileChooserAction.SAVE,
-                accept_label="Save",
-                cancel_label="Cancel",
-            )
-            chooser.set_current_name(f"{self.result.path.stem}-analysis.json")
+            dialog = Gtk.FileDialog()
+            dialog.set_title("Export JSON analysis")
+            dialog.set_modal(True)
+            dialog.set_accept_label("Save")
+            dialog.set_initial_name(f"{self.result.path.stem}-analysis.json")
             json_filter = Gtk.FileFilter()
             json_filter.set_name("JSON report")
             json_filter.add_pattern("*.json")
-            chooser.add_filter(json_filter)
-            chooser.connect("response", self._export_response)
-            chooser.show()
+            filters = Gio.ListStore.new(Gtk.FileFilter)
+            filters.append(json_filter)
+            dialog.set_filters(filters)
+            dialog.set_default_filter(json_filter)
+            self._save_dialog = dialog
+            dialog.save(self, None, self._export_response)
 
-        def _export_response(self, chooser: Any, response: int) -> None:
-            if response == Gtk.ResponseType.ACCEPT and self.result is not None:
-                selected = chooser.get_file()
-                if selected is not None and selected.get_path():
-                    path = Path(selected.get_path())
-                    try:
-                        path.write_text(as_json(self.result) + "\n", encoding="utf-8")
-                        self.toast_overlay.add_toast(
-                            Adw.Toast(title=f"Report saved as {path.name}")
-                        )
-                    except OSError as exc:
-                        self._show_error("Could not save report", str(exc))
-            chooser.destroy()
+        def _export_response(self, dialog: Any, result: Any) -> None:
+            try:
+                selected = dialog.save_finish(result)
+            except GLib.Error:
+                return
+            finally:
+                self._save_dialog = None
+            if self.result is None:
+                return
+            selected_path = selected.get_path()
+            if not selected_path:
+                self._show_error("Could not save report", "Please choose a local folder.")
+                return
+            path = Path(selected_path)
+            try:
+                path.write_text(as_json(self.result) + "\n", encoding="utf-8")
+                self.toast_overlay.add_toast(
+                    Adw.Toast(title=f"Report saved as {path.name}")
+                )
+            except OSError as exc:
+                self._show_error("Could not save report", str(exc))
 
         def _show_error(self, heading: str, body: str) -> None:
             dialog = Adw.MessageDialog.new(self, heading, body)
