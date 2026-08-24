@@ -188,7 +188,6 @@ def _valid_component(value: bytes, *, required: bool) -> bool:
     if required and not value.strip(b" "):
         return False
     seen_space = False
-    allowed_punctuation = b"!#$%&'()-@^_`{}~"
     for byte in value:
         if byte == 0x20:
             seen_space = True
@@ -196,8 +195,6 @@ def _valid_component(value: bytes, *, required: bool) -> bool:
         if seen_space:
             return False
         if not (0x21 <= byte <= 0x7E) or byte in b"<>.,;:=?*[]":
-            return False
-        if not (chr(byte).isalnum() or byte in allowed_punctuation):
             return False
     return True
 

@@ -161,6 +161,7 @@ def insert_files_into_raw_image(
     directory_end = directory_offset + directory_length
     if directory_end > len(image):
         raise FilesystemError("directory falls outside the image")
+    max_block = int(profile.filesystem["max_block"])
 
     free_slots: list[int] = []
     existing_names: set[tuple[int, str]] = set()
@@ -177,9 +178,19 @@ def insert_files_into_raw_image(
             )
         parsed = parse_directory_entry(raw, profile)
         if parsed is None:
-            raise FilesystemError(
-                f"directory slot {index} is structurally invalid; refusing to write"
-            )
+            # The analyzer may encounter vendor-specific or mildly malformed
+            # active entries that it cannot present as files. Preserve the
+            # slot and conservatively reserve every plausible block pointer so
+            # a new file can never overwrite data referenced by that entry.
+            unrecognized_blocks = _allocation_blocks_from_raw(raw, profile)
+            bad_blocks = [block for block in unrecognized_blocks if block > max_block]
+            if bad_blocks:
+                raise FilesystemError(
+                    f"directory slot {index} contains out-of-range allocation "
+                    f"block {bad_blocks[0]}; refusing to write"
+                )
+            used_blocks.update(unrecognized_blocks)
+            continue
         entry, bad_allocations = parsed
         if bad_allocations:
             raise FilesystemError(
@@ -203,7 +214,6 @@ def insert_files_into_raw_image(
     block_size = int(profile.filesystem["block_size"])
     directory_blocks = math.ceil(directory_length / block_size)
     used_blocks.update(range(directory_blocks))
-    max_block = int(profile.filesystem["max_block"])
     free_blocks = [
         block for block in range(directory_blocks, max_block + 1) if block not in used_blocks
     ]
@@ -291,3 +301,16 @@ def _atomic_replace(path: Path, image: bytes | bytearray) -> None:
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _allocation_blocks_from_raw(raw: bytes, profile: DiskProfile) -> tuple[int, ...]:
+    pointer_width = int(profile.filesystem.get("allocation_pointer_bytes", 1))
+    allocation = raw[16:32]
+    if pointer_width == 2:
+        blocks = (
+            int.from_bytes(allocation[index : index + 2], "little")
+            for index in range(0, 16, 2)
+        )
+    else:
+        blocks = iter(allocation)
+    return tuple(block for block in blocks if block)

@@ -80,6 +80,90 @@ class FilesystemTests(unittest.TestCase):
             insert_files_into_raw_image(image_path, "ibm-3740", [source])
         self.assertEqual(image_path.read_bytes(), before)
 
+    def test_accepts_printable_cpm_filename_punctuation(self) -> None:
+        image_path = self.directory / "punctuation.img"
+        _empty_image(image_path)
+        profile = get_profile("ibm-3740")
+        image = bytearray(image_path.read_bytes())
+        entry = bytearray(32)
+        entry[0] = 0
+        entry[1:9] = b"FDC+TEST"
+        entry[9:12] = b"COM"
+        entry[15] = 1
+        entry[16] = 2
+        image[profile.directory_offset : profile.directory_offset + 32] = entry
+        image[
+            profile.directory_offset + 2 * 1024 :
+            profile.directory_offset + 2 * 1024 + 128
+        ] = b"+" * 128
+        image_path.write_bytes(image)
+
+        result = analyze_image(image_path, "ibm-3740")
+        assert result.best_candidate is not None
+        self.assertEqual(result.best_candidate.files[0].name, "FDC+TEST.COM")
+
+    def test_preserves_unrecognized_slot_and_reserves_its_blocks(self) -> None:
+        image_path = self.directory / "unrecognized.img"
+        source = self.directory / "newfile.bin"
+        _empty_image(image_path)
+        profile = get_profile("ibm-3740")
+        image = bytearray(image_path.read_bytes())
+
+        slot_offset = profile.directory_offset + 12 * 32
+        unrecognized = bytearray(32)
+        unrecognized[0] = 0
+        unrecognized[1:9] = b"VENDOR  "
+        unrecognized[9:12] = b"DAT"
+        unrecognized[15] = 129  # Not a normal CP/M extent record count.
+        unrecognized[16] = 5
+        image[slot_offset : slot_offset + 32] = unrecognized
+
+        reserved_block_offset = profile.directory_offset + 5 * 1024
+        image[reserved_block_offset : reserved_block_offset + 1024] = b"\xa5" * 1024
+        image_path.write_bytes(image)
+        source.write_bytes(b"N" * (5 * 1024))
+
+        insert_files_into_raw_image(image_path, "ibm-3740", [source])
+        updated = image_path.read_bytes()
+        self.assertEqual(updated[slot_offset : slot_offset + 32], unrecognized)
+        self.assertEqual(
+            updated[reserved_block_offset : reserved_block_offset + 1024],
+            b"\xa5" * 1024,
+        )
+
+        result = analyze_image(image_path, "ibm-3740")
+        assert result.best_candidate is not None
+        new_file = next(
+            item
+            for item in group_directory_entries(result.best_candidate.files)
+            if item.name == "NEWFILE.BIN"
+        )
+        used = {
+            block for extent in new_file.extents for block in extent.allocation_blocks
+        }
+        self.assertNotIn(5, used)
+
+    def test_refuses_out_of_range_block_in_unrecognized_slot(self) -> None:
+        image_path = self.directory / "unsafe.img"
+        source = self.directory / "newfile.bin"
+        _empty_image(image_path)
+        profile = get_profile("ibm-3740")
+        image = bytearray(image_path.read_bytes())
+        entry = bytearray(32)
+        entry[0] = 0
+        entry[1:9] = b"VENDOR  "
+        entry[9:12] = b"DAT"
+        entry[15] = 129
+        entry[16] = 250
+        image[profile.directory_offset : profile.directory_offset + 32] = entry
+        image_path.write_bytes(image)
+        source.write_bytes(b"new")
+        before = image_path.read_bytes()
+
+        with self.assertRaisesRegex(FilesystemError, "out-of-range allocation"):
+            insert_files_into_raw_image(image_path, "ibm-3740", [source])
+        self.assertEqual(image_path.read_bytes(), before)
+
     def test_import_round_trip_for_each_declared_raw_profile(self) -> None:
         source = self.directory / "roundtrip.dat"
         source.write_bytes(bytes(range(251)) * 9)
