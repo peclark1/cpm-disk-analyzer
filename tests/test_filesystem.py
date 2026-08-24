@@ -164,6 +164,36 @@ class FilesystemTests(unittest.TestCase):
             insert_files_into_raw_image(image_path, "ibm-3740", [source])
         self.assertEqual(image_path.read_bytes(), before)
 
+    def test_preserves_disk_label_and_timestamp_directory_entries(self) -> None:
+        image_path = self.directory / "metadata.img"
+        source = self.directory / "newfile.txt"
+        _empty_image(image_path)
+        profile = get_profile("ibm-3740")
+        image = bytearray(image_path.read_bytes())
+
+        label_offset = profile.directory_offset + 20 * 32
+        label = bytes([0x20]) + b"FDCPLUS " + b"DSK" + bytes(range(20))
+        timestamp_offset = profile.directory_offset + 21 * 32
+        timestamp = bytes([0x21]) + bytes(range(1, 32))
+        image[label_offset : label_offset + 32] = label
+        image[timestamp_offset : timestamp_offset + 32] = timestamp
+        image_path.write_bytes(image)
+        source.write_text("metadata-safe")
+
+        insert_files_into_raw_image(image_path, "ibm-3740", [source])
+        updated = image_path.read_bytes()
+        self.assertEqual(updated[label_offset : label_offset + 32], label)
+        self.assertEqual(updated[timestamp_offset : timestamp_offset + 32], timestamp)
+
+        result = analyze_image(image_path, "ibm-3740")
+        assert result.best_candidate is not None
+        self.assertTrue(
+            any(
+                "disk-label or timestamp" in item.message
+                for item in result.best_candidate.evidence
+            )
+        )
+
     def test_import_round_trip_for_each_declared_raw_profile(self) -> None:
         source = self.directory / "roundtrip.dat"
         source.write_bytes(bytes(range(251)) * 9)

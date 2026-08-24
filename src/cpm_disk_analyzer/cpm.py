@@ -45,6 +45,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     invalid_entries = 0
     unused_entries = 0
     deleted_entries = 0
+    special_entries = 0
     allocation_errors = 0
     active_raw = 0
 
@@ -53,6 +54,11 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
         status = raw[0]
         if status == 0xE5:
             unused_entries += 1
+            continue
+        if status in (0x20, 0x21):
+            # CP/M Plus and compatible extensions use these directory slots
+            # for disk labels and native timestamps, not file extents.
+            special_entries += 1
             continue
         if not (0 <= status <= 31):
             invalid_entries += 1
@@ -128,6 +134,15 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
         )
     if deleted_entries:
         warnings.append(f"{deleted_entries} deleted directory entries were recognized.")
+    if special_entries:
+        evidence.append(
+            Evidence(
+                "observed",
+                f"Preserved {special_entries} disk-label or timestamp directory "
+                "entr{'y' if special_entries == 1 else 'ies'}.",
+                0,
+            )
+        )
 
     for signature in profile.signatures:
         if signature.encode("ascii", errors="ignore").upper() in data.upper():

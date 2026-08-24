@@ -172,9 +172,14 @@ def insert_files_into_raw_image(
         if raw[0] == 0xE5:
             free_slots.append(index)
             continue
+        if raw[0] in (0x20, 0x21):
+            # Disk-label and timestamp entries contain metadata rather than
+            # allocation pointers. Preserve them byte-for-byte.
+            continue
         if not 0 <= raw[0] <= 31:
             raise FilesystemError(
-                f"directory slot {index} is not a valid CP/M entry; refusing to write"
+                f"directory slot {index} has unsupported status {raw[0]:02X}h; "
+                "refusing to write"
             )
         parsed = parse_directory_entry(raw, profile)
         if parsed is None:
