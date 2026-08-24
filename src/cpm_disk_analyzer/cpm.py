@@ -58,7 +58,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
             invalid_entries += 1
             continue
         active_raw += 1
-        parsed = _parse_entry(raw, profile)
+        parsed = parse_directory_entry(raw, profile)
         if parsed is None:
             invalid_entries += 1
             continue
@@ -139,7 +139,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     return _candidate(profile, max(0, min(100, score)), evidence, files, warnings)
 
 
-def _parse_entry(
+def parse_directory_entry(
     raw: bytes, profile: DiskProfile
 ) -> tuple[DirectoryEntry, int] | None:
     cleaned = bytes(value & 0x7F for value in raw[1:12])
@@ -223,4 +223,3 @@ def _candidate(
         files=files,
         warnings=warnings,
     )
-
