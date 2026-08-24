@@ -116,8 +116,8 @@ def _read_imd(data: bytes) -> ContainerImage:
                 )
             )
 
-    # IMD stores sectors in physical order. Sorting by their logical IDs removes
-    # interleave/skew so the filesystem detector receives a linear image.
+    # Normalize tracks into ascending sector-ID order. Filesystem-specific skew
+    # translation is applied later, once a disk profile is being evaluated.
     sectors.sort(key=lambda sector: (sector.cylinder, sector.head, sector.sector_id))
     logical_data = b"".join(sector.data for sector in sectors)
     sizes = sorted({sector.size for sector in sectors})
@@ -149,7 +149,7 @@ def _read_imd(data: bytes) -> ContainerImage:
         observations=[
             "ImageDisk container signature and track records were observed.",
             "Geometry and recording modes were read from the IMD container.",
-            "Sectors were normalized into cylinder/head/logical-sector order.",
+            "Sectors were normalized into cylinder/head/sector-ID order.",
         ],
         warnings=warnings,
     )
@@ -171,4 +171,3 @@ def _imd_mode_name(mode: int) -> str:
         4: "300 kbps MFM",
         5: "250 kbps MFM",
     }[mode]
-

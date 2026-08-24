@@ -28,6 +28,19 @@ class GuiBoundaryTests(unittest.TestCase):
         self.assertIn("self._open_dialog = dialog", source)
         self.assertIn("self._save_dialog = dialog", source)
 
+    def test_wires_copy_only_file_drag_and_drop(self) -> None:
+        source = getsource(gui.create_application)
+        self.assertIn("Gtk.DragSource()", source)
+        self.assertIn("Gdk.DragAction.COPY", source)
+        self.assertIn("Gdk.FileList.new_from_list", source)
+        self.assertIn('dialog.add_response("copy", "Copy into Disk")', source)
+        self.assertNotIn("Gdk.DragAction.MOVE", source)
+
+    def test_window_geometry_is_loaded_and_saved(self) -> None:
+        source = getsource(gui.create_application)
+        self.assertIn("load_window_state()", source)
+        self.assertIn("save_window_state(", source)
+
 
 if __name__ == "__main__":
     unittest.main()

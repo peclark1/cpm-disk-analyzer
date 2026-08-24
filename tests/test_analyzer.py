@@ -7,6 +7,7 @@ from pathlib import Path
 
 from cpm_disk_analyzer.analyzer import analyze_image
 from cpm_disk_analyzer.cli import main
+from cpm_disk_analyzer.layout import from_filesystem_order
 from cpm_disk_analyzer.profiles import get_profile
 from cpm_disk_analyzer.report import as_json
 
@@ -25,7 +26,7 @@ def _make_ibm3740(path: Path) -> None:
     entry[15] = 3
     entry[16] = 2
     image[offset : offset + 32] = entry
-    path.write_bytes(image)
+    path.write_bytes(from_filesystem_order(image, profile))
 
 
 class AnalyzerTests(unittest.TestCase):

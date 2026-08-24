@@ -2,7 +2,7 @@
   {
     "id": "ibm-3740",
     "name": "IBM 3740 8-inch single density",
-    "description": "Canonical CP/M 8-inch SSSD layout: 77 tracks, 26 128-byte sectors, two reserved tracks.",
+    "description": "Canonical CP/M 8-inch SSSD layout: 77 tracks, 26 128-byte sectors, two reserved tracks, and standard 6-sector skew.",
     "geometry": {
       "cylinders": 77,
       "heads": 1,
@@ -15,7 +15,11 @@
       "block_size": 1024,
       "directory_entries": 64,
       "allocation_pointer_bytes": 1,
-      "max_block": 242
+      "max_block": 242,
+      "sector_translation": [
+        1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21,
+        2, 8, 14, 20, 26, 6, 12, 18, 24, 4, 10, 16, 22
+      ]
     },
     "signatures": ["CP/M"]
   },
@@ -80,4 +84,3 @@
     "signatures": ["KAYPRO"]
   }
 ]
-

@@ -28,6 +28,21 @@ class DirectoryEntry:
         return self.records * 128
 
 
+@dataclass(frozen=True)
+class LogicalFile:
+    user: int
+    name: str
+    extents: tuple[DirectoryEntry, ...]
+
+    @property
+    def records(self) -> int:
+        return sum(entry.records for entry in self.extents)
+
+    @property
+    def estimated_size(self) -> int:
+        return self.records * 128
+
+
 @dataclass
 class CandidateResult:
     profile_id: str
@@ -60,4 +75,3 @@ class ImageResult:
         value = asdict(self)
         value["path"] = str(self.path)
         return value
-

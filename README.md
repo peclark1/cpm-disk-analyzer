@@ -18,6 +18,10 @@ from known profiles.
 - Validates CP/M directory entries, extents, record counts, and allocation blocks
 - Reports alternative interpretations with evidence and confidence scores
 - Displays directory extents in the CLI and GUI
+- Groups directory extents into logical files for desktop file transfer
+- Extracts files from raw and IMD images by copy-only drag and drop
+- Copies host files into raw images after explicit confirmation
+- Remembers the GUI window size and maximized state
 - Exports complete machine-readable JSON reports
 - Calculates SHA-256 over the untouched source image
 
@@ -96,6 +100,13 @@ light/dark styling, and Summary, Directory, and Evidence views. Selecting a
 candidate updates the directory and supporting evidence shown for that specific
 interpretation.
 
+In the Directory view, select one or more CP/M files and drag them to Ubuntu
+Files or the desktop to extract copies. To add files, choose the target CP/M
+user area and drop host files onto the analyzer window. Raw images are supported
+for import; IMD images currently support extraction only. Before changing a raw
+image, the analyzer shows the host-to-CP/M 8.3 filename mappings and requires
+confirmation. Existing CP/M files are never replaced by drag and drop.
+
 The GUI can also open an image supplied on the command line:
 
 ```bash
@@ -120,9 +131,13 @@ identical; vendor signatures can distinguish them when present.
 
 ## Safety
 
-Analysis opens source images read-only. The only writes are explicitly requested
-JSON reports. File extraction and repair are intentionally deferred until their
-validation and output-isolation rules are implemented.
+Analysis and extraction do not modify the source image. JSON export and dragged
+file extraction write only to the explicitly selected destination. Dropping host
+files into a raw disk image is the exception: after displaying the CP/M 8.3 name
+mappings, the application requires confirmation and atomically replaces the
+original image. It refuses filename conflicts, invalid directories, insufficient
+space, and unsupported IMD writes before changing the image. CP/M records are
+128 bytes, so an imported file's final record is padded when necessary.
 
 ## Development
 

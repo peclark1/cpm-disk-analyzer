@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from .layout import to_filesystem_order
 from .models import CandidateResult, DirectoryEntry, Evidence
 from .profiles import DiskProfile
 
@@ -14,6 +15,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     score = 0
 
     if len(data) == profile.image_size:
+        data = to_filesystem_order(data, profile)
         score += 25
         evidence.append(
             Evidence(
@@ -45,6 +47,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     invalid_entries = 0
     unused_entries = 0
     deleted_entries = 0
+    special_entries = 0
     allocation_errors = 0
     active_raw = 0
 
@@ -54,11 +57,16 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
         if status == 0xE5:
             unused_entries += 1
             continue
+        if status in (0x20, 0x21):
+            # CP/M Plus and compatible extensions use these directory slots
+            # for disk labels and native timestamps, not file extents.
+            special_entries += 1
+            continue
         if not (0 <= status <= 31):
             invalid_entries += 1
             continue
         active_raw += 1
-        parsed = _parse_entry(raw, profile)
+        parsed = parse_directory_entry(raw, profile)
         if parsed is None:
             invalid_entries += 1
             continue
@@ -128,6 +136,15 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
         )
     if deleted_entries:
         warnings.append(f"{deleted_entries} deleted directory entries were recognized.")
+    if special_entries:
+        evidence.append(
+            Evidence(
+                "observed",
+                f"Preserved {special_entries} disk-label or timestamp directory "
+                "entr{'y' if special_entries == 1 else 'ies'}.",
+                0,
+            )
+        )
 
     for signature in profile.signatures:
         if signature.encode("ascii", errors="ignore").upper() in data.upper():
@@ -139,7 +156,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     return _candidate(profile, max(0, min(100, score)), evidence, files, warnings)
 
 
-def _parse_entry(
+def parse_directory_entry(
     raw: bytes, profile: DiskProfile
 ) -> tuple[DirectoryEntry, int] | None:
     cleaned = bytes(value & 0x7F for value in raw[1:12])
@@ -188,7 +205,6 @@ def _valid_component(value: bytes, *, required: bool) -> bool:
     if required and not value.strip(b" "):
         return False
     seen_space = False
-    allowed_punctuation = b"!#$%&'()-@^_`{}~"
     for byte in value:
         if byte == 0x20:
             seen_space = True
@@ -196,8 +212,6 @@ def _valid_component(value: bytes, *, required: bool) -> bool:
         if seen_space:
             return False
         if not (0x21 <= byte <= 0x7E) or byte in b"<>.,;:=?*[]":
-            return False
-        if not (chr(byte).isalnum() or byte in allowed_punctuation):
             return False
     return True
 
@@ -223,4 +237,3 @@ def _candidate(
         files=files,
         warnings=warnings,
     )
-
