@@ -24,7 +24,27 @@ from known profiles.
 The initial profile catalog includes IBM 3740, Digital Systems 26-sector single
 density, Digital Systems 58-sector double density, and Kaypro II layouts.
 
-## Install for development
+## Ubuntu desktop installation
+
+After cloning the repository, install the Ubuntu dependencies and run the
+included installer:
+
+```bash
+cd ~/src/cpm-disk-analyzer
+sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+./install.sh
+```
+
+The installer creates a project virtual environment, installs the analyzer,
+adds both commands to `~/.local/bin`, and creates an Applications-menu entry
+with an icon. When Ubuntu has a Desktop folder, it also creates a desktop
+shortcut. It only installs files for the current user and does not need
+`sudo`.
+
+The launcher records the repository's absolute location. If the repository is
+moved again, rerun `./install.sh` from its new location.
+
+## Manual/development installation
 
 Ubuntu needs Python, GTK4, libadwaita, and the virtual-environment package:
 
@@ -36,6 +56,11 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
+
+The `cpm-disk-analyzer` and `cpm-disk-analyzer-gui` launchers are generated in
+`.venv/bin` by this installation step; they are not source files in the
+repository. Activate the virtual environment before using the short command
+names, or run `.venv/bin/cpm-disk-analyzer-gui` directly.
 
 `--system-site-packages` lets the virtual environment use Ubuntu's supported
 PyGObject/GTK packages while keeping the analyzer itself isolated.

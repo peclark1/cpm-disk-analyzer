@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=CP/M Disk Analyzer
+Comment=Identify and inspect CP/M disk images
+Exec="@EXEC@" %f
+Icon=io.github.peclark1.CpmDiskAnalyzer
+Terminal=false
+Categories=Utility;System;
+Keywords=CP/M;disk;floppy;image;IMD;retrocomputing;
+StartupNotify=true
+StartupWMClass=io.github.peclark1.CpmDiskAnalyzer
+
