@@ -1,0 +1,83 @@
+[
+  {
+    "id": "ibm-3740",
+    "name": "IBM 3740 8-inch single density",
+    "description": "Canonical CP/M 8-inch SSSD layout: 77 tracks, 26 128-byte sectors, two reserved tracks.",
+    "geometry": {
+      "cylinders": 77,
+      "heads": 1,
+      "sectors_per_track": 26,
+      "sector_size": 128,
+      "encoding": "FM"
+    },
+    "filesystem": {
+      "reserved_tracks": 2,
+      "block_size": 1024,
+      "directory_entries": 64,
+      "allocation_pointer_bytes": 1,
+      "max_block": 242
+    },
+    "signatures": ["CP/M"]
+  },
+  {
+    "id": "dsi-sd26",
+    "name": "Digital Systems 8-inch single density",
+    "description": "Initial DSI/IMSAI single-density profile. Filesystem-compatible candidates may tie with IBM 3740 until a DSI signature is observed.",
+    "geometry": {
+      "cylinders": 77,
+      "heads": 1,
+      "sectors_per_track": 26,
+      "sector_size": 128,
+      "encoding": "FM"
+    },
+    "filesystem": {
+      "reserved_tracks": 2,
+      "block_size": 1024,
+      "directory_entries": 64,
+      "allocation_pointer_bytes": 1,
+      "max_block": 242
+    },
+    "signatures": ["DIGITAL SYSTEMS", "DSI"]
+  },
+  {
+    "id": "dsi-dd58",
+    "name": "Digital Systems 8-inch double density (58 x 128)",
+    "description": "DSI 58-sector MFM image with the directory beginning after two physical tracks.",
+    "geometry": {
+      "cylinders": 77,
+      "heads": 1,
+      "sectors_per_track": 58,
+      "sector_size": 128,
+      "encoding": "MFM"
+    },
+    "filesystem": {
+      "directory_offset": 14848,
+      "block_size": 2048,
+      "directory_entries": 128,
+      "allocation_pointer_bytes": 2,
+      "max_block": 270
+    },
+    "signatures": ["DIGITAL SYSTEMS", "DSI"]
+  },
+  {
+    "id": "kaypro-ii",
+    "name": "Kaypro II 5.25-inch single sided",
+    "description": "Common 40-track Kaypro II CP/M layout.",
+    "geometry": {
+      "cylinders": 40,
+      "heads": 1,
+      "sectors_per_track": 10,
+      "sector_size": 512,
+      "encoding": "MFM"
+    },
+    "filesystem": {
+      "reserved_tracks": 1,
+      "block_size": 1024,
+      "directory_entries": 64,
+      "allocation_pointer_bytes": 1,
+      "max_block": 194
+    },
+    "signatures": ["KAYPRO"]
+  }
+]
+
