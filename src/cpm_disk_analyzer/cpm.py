@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from .layout import to_filesystem_order
 from .models import CandidateResult, DirectoryEntry, Evidence
 from .profiles import DiskProfile
 
@@ -14,6 +15,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     score = 0
 
     if len(data) == profile.image_size:
+        data = to_filesystem_order(data, profile)
         score += 25
         evidence.append(
             Evidence(

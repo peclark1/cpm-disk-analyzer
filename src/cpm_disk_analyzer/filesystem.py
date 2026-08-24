@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .cpm import parse_directory_entry
+from .layout import from_filesystem_order, to_filesystem_order
 from .models import DirectoryEntry, LogicalFile
 from .profiles import DiskProfile, get_profile
 
@@ -53,6 +54,7 @@ def group_directory_entries(entries: Iterable[DirectoryEntry]) -> list[LogicalFi
 def extract_logical_file(
     logical_data: bytes, profile: DiskProfile, logical_file: LogicalFile
 ) -> bytes:
+    logical_data = to_filesystem_order(logical_data, profile)
     block_size = int(profile.filesystem["block_size"])
     output = bytearray()
     seen_extents: set[int] = set()
@@ -146,14 +148,15 @@ def insert_files_into_raw_image(
     if not plans:
         return []
 
-    image = bytearray(path.read_bytes())
-    if image.startswith(b"IMD "):
+    physical_image = path.read_bytes()
+    if physical_image.startswith(b"IMD "):
         raise FilesystemError("writing ImageDisk containers is not supported yet")
-    if len(image) != profile.image_size:
+    if len(physical_image) != profile.image_size:
         raise FilesystemError(
-            f"image size is {len(image):,} bytes; {profile.name} requires "
+            f"image size is {len(physical_image):,} bytes; {profile.name} requires "
             f"{profile.image_size:,} bytes"
         )
+    image = bytearray(to_filesystem_order(physical_image, profile))
 
     entry_count = int(profile.filesystem["directory_entries"])
     directory_offset = profile.directory_offset
@@ -166,6 +169,8 @@ def insert_files_into_raw_image(
     free_slots: list[int] = []
     existing_names: set[tuple[int, str]] = set()
     used_blocks: set[int] = set()
+    recognized_entries = 0
+    opaque_entries = 0
     for index in range(entry_count):
         start = directory_offset + index * 32
         raw = bytes(image[start : start + 32])
@@ -177,32 +182,33 @@ def insert_files_into_raw_image(
             # allocation pointers. Preserve them byte-for-byte.
             continue
         if not 0 <= raw[0] <= 31:
-            raise FilesystemError(
-                f"directory slot {index} has unsupported status {raw[0]:02X}h; "
-                "refusing to write"
-            )
+            opaque_entries += 1
+            _reserve_opaque_entry_blocks(raw, profile, index, max_block, used_blocks)
+            continue
         parsed = parse_directory_entry(raw, profile)
         if parsed is None:
             # The analyzer may encounter vendor-specific or mildly malformed
             # active entries that it cannot present as files. Preserve the
             # slot and conservatively reserve every plausible block pointer so
             # a new file can never overwrite data referenced by that entry.
-            unrecognized_blocks = _allocation_blocks_from_raw(raw, profile)
-            bad_blocks = [block for block in unrecognized_blocks if block > max_block]
-            if bad_blocks:
-                raise FilesystemError(
-                    f"directory slot {index} contains out-of-range allocation "
-                    f"block {bad_blocks[0]}; refusing to write"
-                )
-            used_blocks.update(unrecognized_blocks)
+            opaque_entries += 1
+            _reserve_opaque_entry_blocks(raw, profile, index, max_block, used_blocks)
             continue
         entry, bad_allocations = parsed
         if bad_allocations:
             raise FilesystemError(
                 f"directory slot {index} contains an out-of-range allocation block"
             )
+        recognized_entries += 1
         existing_names.add((entry.user, entry.name))
         used_blocks.update(entry.allocation_blocks)
+
+    opaque_limit = max(2, recognized_entries // 4)
+    if opaque_entries > opaque_limit:
+        raise FilesystemError(
+            f"directory contains {opaque_entries} unrecognized entries; the selected "
+            "format is not reliable enough for writing"
+        )
 
     conflicts = [plan.cpm_name for plan in plans if (user, plan.cpm_name) in existing_names]
     if conflicts:
@@ -286,7 +292,7 @@ def insert_files_into_raw_image(
 
         imported.append(ImportedFile(plan.source, plan.cpm_name, user, plan.size, plan.records))
 
-    _atomic_replace(path, image)
+    _atomic_replace(path, from_filesystem_order(image, profile))
     return imported
 
 
@@ -319,3 +325,20 @@ def _allocation_blocks_from_raw(raw: bytes, profile: DiskProfile) -> tuple[int, 
     else:
         blocks = iter(allocation)
     return tuple(block for block in blocks if block)
+
+
+def _reserve_opaque_entry_blocks(
+    raw: bytes,
+    profile: DiskProfile,
+    index: int,
+    max_block: int,
+    used_blocks: set[int],
+) -> None:
+    blocks = _allocation_blocks_from_raw(raw, profile)
+    bad_blocks = [block for block in blocks if block > max_block]
+    if bad_blocks:
+        raise FilesystemError(
+            f"directory slot {index} contains out-of-range allocation block "
+            f"{bad_blocks[0]}; refusing to write"
+        )
+    used_blocks.update(blocks)
