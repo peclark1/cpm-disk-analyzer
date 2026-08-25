@@ -1,7 +1,7 @@
 # CP/M Disk Analyzer
 
-CP/M Disk Analyzer identifies and inspects vintage CP/M disk images without
-modifying them. It combines a reusable Python analysis engine with both a
+CP/M Disk Analyzer identifies, inspects, and safely edits supported vintage CP/M
+disk images. It combines a reusable Python analysis engine with both a
 command-line interface and a native GTK4/libadwaita desktop application.
 
 This is an early, evidence-driven release. It deliberately distinguishes facts
@@ -17,16 +17,22 @@ from known profiles.
 - Tests images against declarative CP/M disk profiles
 - Validates CP/M directory entries, extents, record counts, and allocation blocks
 - Reports alternative interpretations with evidence and confidence scores
-- Displays directory extents in the CLI and GUI
+- Displays directory extents in the CLI and logical files in the GUI
+- Displays standard CP/M read-only, system, and archive file attributes
 - Groups directory extents into logical files for desktop file transfer
 - Extracts files from raw and IMD images by copy-only drag and drop
 - Copies host files into raw images after explicit confirmation
+- Renames and deletes files in raw images with extent-aware directory updates
+- Sets CP/M read-only, system, and archive attributes in raw images
+- Opens S100Computers/Z80-SBC/Dual IDE-CF `s100ide` CP/M 3 images, including
+  stock short images that omit unused trailing CF sectors
 - Remembers the GUI window size and maximized state
 - Exports complete machine-readable JSON reports
-- Calculates SHA-256 over the untouched source image
+- Calculates SHA-256 over the source image as opened
 
-The initial profile catalog includes IBM 3740, Digital Systems 26-sector single
-density, Digital Systems 58-sector double density, and Kaypro II layouts.
+The profile catalog includes IBM 3740, Digital Systems 26-sector single density,
+Digital Systems 58-sector double density, Kaypro II, and S100Computers IDE/CF
+CP/M 3 layouts.
 
 ## Ubuntu desktop installation
 
@@ -77,6 +83,7 @@ cpm-disk-analyzer analyze disk.imd
 cpm-disk-analyzer analyze disk.img --show-files
 cpm-disk-analyzer analyze disk.img --json disk-analysis.json
 cpm-disk-analyzer analyze disk.img --profile dsi-dd58
+cpm-disk-analyzer analyze s100-cpm3.img --profile s100ide
 ```
 
 Exit status is `0` when at least one candidate is found, `1` when no current
@@ -107,6 +114,33 @@ for import; IMD images currently support extraction only. Before changing a raw
 image, the analyzer shows the host-to-CP/M 8.3 filename mappings and requires
 confirmation. Existing CP/M files are never replaced by drag and drop.
 
+Selecting exactly one file in a raw image also enables **Rename…**,
+**Attributes…**, and **Delete**. Rename updates every extent while retaining
+existing attribute bits. Attributes exposes the standard CP/M R/O, SYS, and ARC
+flags. Delete requires destructive confirmation and marks every directory extent
+of the selected logical file deleted. These editing controls remain disabled for
+IMD images.
+
+### S100 IDE/CF images
+
+The `s100ide` profile matches the S100Computers/Z80-SBC/Dual IDE-CF CP/M 3
+"no holes" layout used by the supported build:
+
+- 512-byte physical sectors
+- 64 sectors per CP/M track
+- 256 CP/M tracks
+- one reserved track
+- 2048-byte allocation blocks
+- 1024 directory entries
+- 16-bit allocation pointers
+- directory beginning at LBA 64
+
+The logical CP/M volume is 8 MiB, but commonly distributed image files can be
+shorter because unused trailing CF sectors are omitted. The analyzer accepts
+these sector-aligned short images. If importing a new file requires allocation
+blocks beyond the current end of a short image, it extends the image only as far
+as necessary; it does not automatically pad the file to 8 MiB.
+
 The GUI can also open an image supplied on the command line:
 
 ```bash
@@ -132,12 +166,13 @@ identical; vendor signatures can distinguish them when present.
 ## Safety
 
 Analysis and extraction do not modify the source image. JSON export and dragged
-file extraction write only to the explicitly selected destination. Dropping host
-files into a raw disk image is the exception: after displaying the CP/M 8.3 name
-mappings, the application requires confirmation and atomically replaces the
-original image. It refuses filename conflicts, invalid directories, insufficient
-space, and unsupported IMD writes before changing the image. CP/M records are
-128 bytes, so an imported file's final record is padded when necessary.
+file extraction write only to the explicitly selected destination. Raw-image
+imports, rename, delete, and attribute changes are explicit editing operations.
+They validate the selected profile and directory first and atomically replace the
+original image rather than editing it piecemeal. The GUI requires confirmation
+for imports and deletion, refuses filename conflicts and invalid 8.3 renames,
+and does not write IMD containers. CP/M records are 128 bytes, so an imported
+file's final record is padded when necessary.
 
 ## Development
 
