@@ -14,6 +14,11 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
     warnings: list[str] = []
     score = 0
 
+    entry_count = int(profile.filesystem["directory_entries"])
+    directory_length = entry_count * 32
+    minimum_size = profile.directory_offset + directory_length
+    variable_image_size = bool(profile.filesystem.get("variable_image_size", False))
+
     if len(data) == profile.image_size:
         data = to_filesystem_order(data, profile)
         score += 25
@@ -22,6 +27,22 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
                 "derived",
                 f"Image length exactly matches {profile.image_size:,} bytes.",
                 25,
+            )
+        )
+    elif (
+        variable_image_size
+        and len(data) >= minimum_size
+        and len(data) % int(profile.geometry["sector_size"]) == 0
+    ):
+        data = to_filesystem_order(data, profile)
+        score += 12
+        relationship = "truncated image" if len(data) < profile.image_size else "full-media image"
+        evidence.append(
+            Evidence(
+                "observed",
+                f"Image is a sector-aligned {relationship} ({len(data):,} bytes) for a "
+                f"{profile.image_size:,}-byte logical CP/M volume.",
+                12,
             )
         )
     else:
@@ -36,8 +57,6 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
         score -= 30
 
     offset = profile.directory_offset
-    entry_count = int(profile.filesystem["directory_entries"])
-    directory_length = entry_count * 32
     if offset + directory_length > len(data):
         evidence.append(Evidence("derived", "Directory region falls outside the image.", -60))
         return _candidate(profile, max(0, score - 60), evidence, [], warnings)
@@ -141,7 +160,7 @@ def score_profile(data: bytes, profile: DiskProfile) -> CandidateResult:
             Evidence(
                 "observed",
                 f"Preserved {special_entries} disk-label or timestamp directory "
-                "entr{'y' if special_entries == 1 else 'ies'}.",
+                f"entr{'y' if special_entries == 1 else 'ies'}.",
                 0,
             )
         )
@@ -196,6 +215,9 @@ def parse_directory_entry(
             extent=extent,
             records=records,
             allocation_blocks=blocks,
+            read_only=bool(raw[9] & 0x80),
+            system=bool(raw[10] & 0x80),
+            archive=bool(raw[11] & 0x80),
         ),
         bad_allocations,
     )
