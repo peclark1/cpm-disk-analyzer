@@ -82,5 +82,26 @@
       "max_block": 194
     },
     "signatures": ["KAYPRO"]
+  },
+  {
+    "id": "s100ide",
+    "name": "S100Computers IDE/CF CP/M 3",
+    "description": "S100Computers/Z80-SBC/Dual IDE-CF no-holes LBA layout: 512-byte sectors, 64 sectors per track, one reserved track, 2 KiB allocation blocks, and 1024 directory entries. Stock images may omit unused trailing CF sectors.",
+    "geometry": {
+      "cylinders": 256,
+      "heads": 1,
+      "sectors_per_track": 64,
+      "sector_size": 512,
+      "encoding": "IDE/LBA"
+    },
+    "filesystem": {
+      "reserved_tracks": 1,
+      "block_size": 2048,
+      "directory_entries": 1024,
+      "allocation_pointer_bytes": 2,
+      "max_block": 4079,
+      "variable_image_size": true
+    },
+    "signatures": ["CP/M", "CPM3"]
   }
 ]

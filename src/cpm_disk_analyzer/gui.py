@@ -9,6 +9,11 @@ from typing import Any
 
 from .analyzer import analyze_image
 from .containers import read_image
+from .fileops import (
+    delete_file_from_raw_image,
+    rename_file_in_raw_image,
+    set_file_attributes_in_raw_image,
+)
 from .filesystem import (
     FilesystemError,
     extract_logical_file,
@@ -87,11 +92,11 @@ def create_application() -> Any:
             self._drag_directory = tempfile.TemporaryDirectory(
                 prefix="cpm-disk-analyzer-drag-"
             )
-            # Keep asynchronous chooser objects alive until their callbacks
-            # finish. This avoids PyGObject/native-dialog lifetime crashes.
+            # Keep asynchronous chooser/dialog objects alive until callbacks finish.
             self._open_dialog: Any | None = None
             self._save_dialog: Any | None = None
             self._import_dialog: Any | None = None
+            self._file_action_dialog: Any | None = None
             self._candidate_rows: list[Any] = []
             self._profile_ids: list[str | None] = [None]
             profile_labels = ["Automatic detection"]
@@ -294,8 +299,9 @@ def create_application() -> Any:
 
             transfer_hint = Gtk.Label(
                 label=(
-                    "Drag selected files to the desktop to extract copies. "
-                    "Drop host files here to copy them into a raw image."
+                    "Drag selected files to the desktop to extract copies. Drop host files "
+                    "here to copy them into a raw image. Select one file to rename, delete, "
+                    "or change its CP/M attributes."
                 ),
                 xalign=0,
                 wrap=True,
@@ -304,11 +310,30 @@ def create_application() -> Any:
             transfer_hint.add_css_class("dim-label")
             outer.append(transfer_hint)
 
+            actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            self.rename_button = Gtk.Button(label="Rename…")
+            self.rename_button.set_sensitive(False)
+            self.rename_button.connect("clicked", self._rename_selected)
+            actions.append(self.rename_button)
+
+            self.attributes_button = Gtk.Button(label="Attributes…")
+            self.attributes_button.set_sensitive(False)
+            self.attributes_button.connect("clicked", self._attributes_selected)
+            actions.append(self.attributes_button)
+
+            self.delete_button = Gtk.Button(label="Delete")
+            self.delete_button.add_css_class("destructive-action")
+            self.delete_button.set_sensitive(False)
+            self.delete_button.connect("clicked", self._delete_selected)
+            actions.append(self.delete_button)
+            outer.append(actions)
+
             header = Gtk.Grid(column_spacing=12)
             for index, (text, width) in enumerate(
                 (
                     ("User", 6),
                     ("Filename", 20),
+                    ("Attributes", 12),
                     ("Extents", 8),
                     ("Records", 8),
                     ("Approx. bytes", 12),
@@ -324,6 +349,9 @@ def create_application() -> Any:
             self.directory_list = Gtk.ListBox()
             self.directory_list.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
             self.directory_list.add_css_class("boxed-list")
+            self.directory_list.connect(
+                "selected-rows-changed", self._directory_selection_changed
+            )
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             scroll.set_vexpand(True)
@@ -422,9 +450,9 @@ def create_application() -> Any:
             self.export_button.set_sensitive(True)
             self.window_title.set_subtitle(result.path.name)
             if result.container == "raw":
-                transfer_status = "drag out or drop in with confirmation"
+                transfer_status = "drag/drop and directory editing with confirmation"
             else:
-                transfer_status = "drag out; IMD import is not yet supported"
+                transfer_status = "drag out; IMD writing is not yet supported"
             self.sidebar_status.set_label(
                 f"{result.container.upper()} • {result.size:,} bytes • {transfer_status}"
             )
@@ -537,6 +565,7 @@ def create_application() -> Any:
                 values = (
                     (f"{logical_file.user:02d}", 6),
                     (logical_file.name, 20),
+                    (logical_file.attribute_text, 12),
                     (str(len(logical_file.extents)), 8),
                     (str(logical_file.records), 8),
                     (f"{logical_file.estimated_size:,}", 12),
@@ -551,6 +580,7 @@ def create_application() -> Any:
                 drag_source.connect("prepare", self._prepare_file_drag, row)
                 row.add_controller(drag_source)
                 self.directory_list.append(row)
+            self._directory_selection_changed(self.directory_list)
 
             evidence_lines = [
                 f"{candidate.profile_name}",
@@ -563,6 +593,186 @@ def create_application() -> Any:
             )
             evidence_lines.extend(f"\nWARNING: {warning}" for warning in candidate.warnings)
             self.evidence_view.get_buffer().set_text("\n".join(evidence_lines))
+
+        def _selected_logical_file(self) -> LogicalFile | None:
+            rows = list(self.directory_list.get_selected_rows())
+            if len(rows) != 1 or not hasattr(rows[0], "logical_file"):
+                return None
+            return rows[0].logical_file
+
+        def _directory_selection_changed(self, _list_box: Any) -> None:
+            logical_file = self._selected_logical_file()
+            editable = (
+                logical_file is not None
+                and self.result is not None
+                and self.result.container == "raw"
+                and self.current_path is not None
+                and self.current_candidate is not None
+            )
+            self.rename_button.set_sensitive(editable)
+            self.attributes_button.set_sensitive(editable)
+            self.delete_button.set_sensitive(editable)
+
+        def _rename_selected(self, _button: Any) -> None:
+            logical_file = self._selected_logical_file()
+            if logical_file is None:
+                return
+            entry = Gtk.Entry()
+            entry.set_text(logical_file.name)
+            entry.set_activates_default(True)
+            entry.select_region(0, -1)
+            dialog = Adw.MessageDialog.new(
+                self,
+                "Rename CP/M file",
+                f"Rename {logical_file.name} in user {logical_file.user}?",
+            )
+            dialog.set_extra_child(entry)
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("rename", "Rename")
+            dialog.set_default_response("rename")
+            dialog.set_close_response("cancel")
+            dialog.set_response_appearance("rename", Adw.ResponseAppearance.SUGGESTED)
+            dialog.connect("response", self._rename_response, logical_file, entry)
+            self._file_action_dialog = dialog
+            dialog.present()
+
+        def _rename_response(
+            self,
+            _dialog: Any,
+            response: str,
+            logical_file: LogicalFile,
+            entry: Any,
+        ) -> None:
+            self._file_action_dialog = None
+            if response != "rename":
+                return
+            if self.current_path is None or self.current_candidate is None:
+                return
+            new_name = entry.get_text().strip().upper()
+            try:
+                changed = rename_file_in_raw_image(
+                    self.current_path,
+                    self.current_candidate.profile_id,
+                    user=logical_file.user,
+                    old_name=logical_file.name,
+                    new_name=new_name,
+                )
+                if changed:
+                    self._analyze_current_path()
+                    self.toast_overlay.add_toast(
+                        Adw.Toast(title=f"Renamed {logical_file.name} to {new_name}")
+                    )
+            except (OSError, FilesystemError, KeyError) as exc:
+                self._show_error("Could not rename file", str(exc))
+
+        def _attributes_selected(self, _button: Any) -> None:
+            logical_file = self._selected_logical_file()
+            if logical_file is None:
+                return
+            controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            read_only = Gtk.CheckButton(label="Read only (R/O)")
+            read_only.set_active(logical_file.read_only)
+            controls.append(read_only)
+            system = Gtk.CheckButton(label="System (SYS)")
+            system.set_active(logical_file.system)
+            controls.append(system)
+            archive = Gtk.CheckButton(label="Archive (ARC)")
+            archive.set_active(logical_file.archive)
+            controls.append(archive)
+
+            dialog = Adw.MessageDialog.new(
+                self,
+                "CP/M file attributes",
+                f"Set attributes for {logical_file.name} in user {logical_file.user}.",
+            )
+            dialog.set_extra_child(controls)
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("apply", "Apply")
+            dialog.set_default_response("apply")
+            dialog.set_close_response("cancel")
+            dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED)
+            dialog.connect(
+                "response",
+                self._attributes_response,
+                logical_file,
+                read_only,
+                system,
+                archive,
+            )
+            self._file_action_dialog = dialog
+            dialog.present()
+
+        def _attributes_response(
+            self,
+            _dialog: Any,
+            response: str,
+            logical_file: LogicalFile,
+            read_only: Any,
+            system: Any,
+            archive: Any,
+        ) -> None:
+            self._file_action_dialog = None
+            if response != "apply":
+                return
+            if self.current_path is None or self.current_candidate is None:
+                return
+            try:
+                set_file_attributes_in_raw_image(
+                    self.current_path,
+                    self.current_candidate.profile_id,
+                    user=logical_file.user,
+                    name=logical_file.name,
+                    read_only=read_only.get_active(),
+                    system=system.get_active(),
+                    archive=archive.get_active(),
+                )
+                self._analyze_current_path()
+                self.toast_overlay.add_toast(
+                    Adw.Toast(title=f"Updated attributes for {logical_file.name}")
+                )
+            except (OSError, FilesystemError, KeyError) as exc:
+                self._show_error("Could not change attributes", str(exc))
+
+        def _delete_selected(self, _button: Any) -> None:
+            logical_file = self._selected_logical_file()
+            if logical_file is None:
+                return
+            body = (
+                f"Delete {logical_file.name} from CP/M user {logical_file.user}?\n\n"
+                "All directory extents for this file will be marked deleted. The original "
+                "raw disk image will be modified."
+            )
+            dialog = Adw.MessageDialog.new(self, "Delete CP/M file?", body)
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("delete", "Delete")
+            dialog.set_default_response("cancel")
+            dialog.set_close_response("cancel")
+            dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.connect("response", self._delete_response, logical_file)
+            self._file_action_dialog = dialog
+            dialog.present()
+
+        def _delete_response(
+            self, _dialog: Any, response: str, logical_file: LogicalFile
+        ) -> None:
+            self._file_action_dialog = None
+            if response != "delete":
+                return
+            if self.current_path is None or self.current_candidate is None:
+                return
+            try:
+                delete_file_from_raw_image(
+                    self.current_path,
+                    self.current_candidate.profile_id,
+                    user=logical_file.user,
+                    name=logical_file.name,
+                )
+                self._analyze_current_path()
+                self.toast_overlay.add_toast(
+                    Adw.Toast(title=f"Deleted {logical_file.name}")
+                )
+            except (OSError, FilesystemError, KeyError) as exc:
+                self._show_error("Could not delete file", str(exc))
 
         def _prepare_file_drag(
             self, _source: Any, _x: float, _y: float, row: Any
@@ -734,6 +944,7 @@ def create_application() -> Any:
             self.current_candidate = None
             self._clear_list_box(self.directory_list)
             self.directory_heading.set_label("No CP/M directory selected")
+            self._directory_selection_changed(self.directory_list)
             self.evidence_view.get_buffer().set_text(
                 "No candidate evidence is available for this image."
             )
@@ -746,7 +957,7 @@ def create_application() -> Any:
                 title="Open a disk image",
                 subtitle=(
                     "Choose an IMG, IMD, DSK, or RAW file. Analysis and extraction "
-                    "are read-only; imports require confirmation."
+                    "are read-only; changes to raw images require confirmation."
                 ),
             )
             row.add_prefix(Gtk.Image.new_from_icon_name("document-open-symbolic"))
