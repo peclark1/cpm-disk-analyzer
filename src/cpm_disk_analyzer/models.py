@@ -22,6 +22,9 @@ class DirectoryEntry:
     records: int
     allocation_blocks: tuple[int, ...]
     deleted: bool = False
+    read_only: bool = False
+    system: bool = False
+    archive: bool = False
 
     @property
     def estimated_size(self) -> int:
@@ -41,6 +44,29 @@ class LogicalFile:
     @property
     def estimated_size(self) -> int:
         return self.records * 128
+
+    @property
+    def read_only(self) -> bool:
+        return any(entry.read_only for entry in self.extents)
+
+    @property
+    def system(self) -> bool:
+        return any(entry.system for entry in self.extents)
+
+    @property
+    def archive(self) -> bool:
+        return any(entry.archive for entry in self.extents)
+
+    @property
+    def attribute_text(self) -> str:
+        attributes = []
+        if self.read_only:
+            attributes.append("R/O")
+        if self.system:
+            attributes.append("SYS")
+        if self.archive:
+            attributes.append("ARC")
+        return " ".join(attributes) if attributes else "—"
 
 
 @dataclass
