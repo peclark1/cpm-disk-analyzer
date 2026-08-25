@@ -151,17 +151,25 @@ def insert_files_into_raw_image(
     physical_image = path.read_bytes()
     if physical_image.startswith(b"IMD "):
         raise FilesystemError("writing ImageDisk containers is not supported yet")
-    if len(physical_image) != profile.image_size:
+
+    entry_count = int(profile.filesystem["directory_entries"])
+    directory_offset = profile.directory_offset
+    directory_length = entry_count * 32
+    directory_end = directory_offset + directory_length
+    variable_image_size = bool(profile.filesystem.get("variable_image_size", False))
+    if variable_image_size:
+        if len(physical_image) < directory_end:
+            raise FilesystemError(
+                f"image is {len(physical_image):,} bytes; {profile.name} needs at least "
+                f"{directory_end:,} bytes to contain its directory"
+            )
+    elif len(physical_image) != profile.image_size:
         raise FilesystemError(
             f"image size is {len(physical_image):,} bytes; {profile.name} requires "
             f"{profile.image_size:,} bytes"
         )
     image = bytearray(to_filesystem_order(physical_image, profile))
 
-    entry_count = int(profile.filesystem["directory_entries"])
-    directory_offset = profile.directory_offset
-    directory_length = entry_count * 32
-    directory_end = directory_offset + directory_length
     if directory_end > len(image):
         raise FilesystemError("directory falls outside the image")
     max_block = int(profile.filesystem["max_block"])
@@ -261,8 +269,14 @@ def insert_files_into_raw_image(
             for payload_offset, block in enumerate(extent_blocks):
                 start = directory_offset + block * block_size
                 end = start + block_size
+                if end > profile.image_size:
+                    raise FilesystemError(f"allocation block {block} falls outside the CP/M volume")
                 if end > len(image):
-                    raise FilesystemError(f"allocation block {block} falls outside the image")
+                    if not variable_image_size:
+                        raise FilesystemError(
+                            f"allocation block {block} falls outside the image"
+                        )
+                    image.extend(bytes(end - len(image)))
                 image[start:end] = bytes(block_size)
                 chunk = extent_payload[
                     payload_offset * block_size : (payload_offset + 1) * block_size
