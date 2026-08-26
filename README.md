@@ -26,6 +26,11 @@ from known profiles.
 - Sets CP/M read-only, system, and archive attributes in raw images
 - Opens S100Computers/Z80-SBC/Dual IDE-CF `s100ide` CP/M 3 images, including
   stock short images that omit unused trailing CF sectors
+- Recursively inventories `.img`, `.imd`, and `.dsk` archives with per-image and
+  per-file SHA-256 hashes, duplicate counts, and density-folder provenance
+- Looks for explicit Z80-only constructs in assembly/listing source and follows
+  reachable code in `.COM`, Intel HEX, and boot/system areas to avoid treating
+  arbitrary data bytes as Z80 instructions
 - Remembers the GUI window size and maximized state
 - Exports complete machine-readable JSON reports
 - Calculates SHA-256 over the source image as opened
@@ -84,10 +89,52 @@ cpm-disk-analyzer analyze disk.img --show-files
 cpm-disk-analyzer analyze disk.img --json disk-analysis.json
 cpm-disk-analyzer analyze disk.img --profile dsi-dd58
 cpm-disk-analyzer analyze s100-cpm3.img --profile s100ide
+cpm-disk-analyzer scan ~/DiskArchive --csv archive-files.csv --json archive-index.json
 ```
 
-Exit status is `0` when at least one candidate is found, `1` when no current
-profile is credible, and `2` for an input or container error.
+Exit status for `analyze` is `0` when at least one candidate is found, `1` when
+no current profile is credible, and `2` for an input or container error.
+
+### Archive archaeology scan
+
+`scan` recursively visits `.img`, `.imd`, and `.dsk` files beneath an archive
+root. It runs the normal profile detector, groups CP/M extents into logical
+files, hashes each extracted file, and records repeated names and identical file
+contents across disks. If the archive path contains `SingleDensity` or
+`DoubleDensity`, that folder name is preserved as a `single` or `double`
+provenance bucket; it does not override independent format detection.
+
+The scan also looks for evidence that software requires a Z80 rather than a
+plain 8080. Assembly/listing files are checked for explicit constructs such as
+`IX`, `IY`, `DJNZ`, `JR`, `LDIR`, and Z80 interrupt modes. `.COM` and Intel HEX
+files are decoded from their entry points and only reachable Z80-only opcodes
+are reported, so opcode-looking bytes embedded in data do not count as code.
+The boot/system area is treated the same way, starting from address `0000H`.
+This is intentionally conservative and is an archaeological clue detector, not
+a claim that every flagged binary uniquely identifies a specific CPU board.
+
+The CSV contains one row per CP/M logical file and is convenient for sorting or
+filtering. The JSON retains the full evidence list, image results, duplicate
+counts, rare filenames, and boot/system-area findings. Both operations are
+read-only with respect to the disk images.
+
+For example, with an archive organized by density:
+
+```text
+DiskArchive/
+├── SingleDensity/
+│   └── ... presumptive IMSAI-history images ...
+└── DoubleDensity/
+    └── ... separately tracked provenance ...
+```
+
+run:
+
+```bash
+cpm-disk-analyzer scan ~/DiskArchive \
+  --csv ~/archive-files.csv \
+  --json ~/archive-index.json
+```
 
 ## Desktop GUI
 
@@ -165,14 +212,15 @@ identical; vendor signatures can distinguish them when present.
 
 ## Safety
 
-Analysis and extraction do not modify the source image. JSON export and dragged
-file extraction write only to the explicitly selected destination. Raw-image
-imports, rename, delete, and attribute changes are explicit editing operations.
-They validate the selected profile and directory first and atomically replace the
-original image rather than editing it piecemeal. The GUI requires confirmation
-for imports and deletion, refuses filename conflicts and invalid 8.3 renames,
-and does not write IMD containers. CP/M records are 128 bytes, so an imported
-file's final record is padded when necessary.
+Analysis, archive scanning, and extraction do not modify the source image. JSON
+or CSV export and dragged file extraction write only to the explicitly selected
+destination. Raw-image imports, rename, delete, and attribute changes are
+explicit editing operations. They validate the selected profile and directory
+first and atomically replace the original image rather than editing it
+piecemeal. The GUI requires confirmation for imports and deletion, refuses
+filename conflicts and invalid 8.3 renames, and does not write IMD containers.
+CP/M records are 128 bytes, so an imported file's final record is padded when
+necessary.
 
 ## Development
 
