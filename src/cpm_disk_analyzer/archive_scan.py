@@ -91,14 +91,29 @@ _Z80_RELATIVE = {
 # ED-prefix instructions with clear documented Z80 semantics. Undefined ED
 # combinations are deliberately excluded.
 _KNOWN_ED = {
-    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B,
-    0x4D, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-    0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65,
-    0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71,
-    0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D,
-    0x7E, 0x7F,
+    # IN r,(C) / OUT (C),r
+    0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x78,
+    0x41, 0x49, 0x51, 0x59, 0x61, 0x69, 0x79,
+    # SBC/ADC HL,rr
+    0x42, 0x52, 0x62, 0x72, 0x4A, 0x5A, 0x6A, 0x7A,
+    # 16-bit memory transfers
+    0x43, 0x53, 0x63, 0x73, 0x4B, 0x5B, 0x6B, 0x7B,
+    # NEG, RETN/RETI, interrupt mode, I/R transfers, RRD/RLD
+    0x44, 0x45, 0x4D, 0x46, 0x56, 0x5E, 0x47, 0x4F, 0x57, 0x5F, 0x67, 0x6F,
+    # Block instructions
     0xA0, 0xA1, 0xA2, 0xA3, 0xA8, 0xA9, 0xAA, 0xAB,
     0xB0, 0xB1, 0xB2, 0xB3, 0xB8, 0xB9, 0xBA, 0xBB,
+}
+
+# Documented DD/FD opcodes that genuinely substitute IX/IY or (IX/IY+d).
+# Prefixes before unrelated opcodes (for example FD 03 or FD 1F) are not
+# evidence of index-register use and are deliberately ignored.
+_INDEXED_OPCODES = {
+    0x09, 0x19, 0x21, 0x22, 0x23, 0x29, 0x2A, 0x2B, 0x34, 0x35, 0x36, 0x39,
+    0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E,
+    0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x7E,
+    0x86, 0x8E, 0x96, 0x9E, 0xA6, 0xAE, 0xB6, 0xBE,
+    0xE1, 0xE3, 0xE5, 0xE9, 0xF9,
 }
 
 
@@ -301,21 +316,35 @@ def binary_z80_evidence(
                 continue
 
             if opcode in (0xDD, 0xFD):
+                if index + 1 >= len(data):
+                    break
                 prefix_name = "IX (DDh)" if opcode == 0xDD else "IY (FDh)"
-                next_byte = data[index + 1] if index + 1 < len(data) else None
-                hits.append(
-                    {
-                        "kind": "binary",
-                        "confidence": "strong",
-                        "location": f"{address:04X}h",
-                        "instruction": prefix_name,
-                        "detail": (
-                            "reachable Z80 index-register prefix"
-                            + (f" before opcode {next_byte:02X}h" if next_byte is not None else "")
-                        ),
-                        "bytes": _byte_text(data, index, min(2, len(data) - index)),
-                    }
-                )
+                second = data[index + 1]
+                if second == 0xCB and index + 3 < len(data):
+                    hits.append(
+                        {
+                            "kind": "binary",
+                            "confidence": "strong",
+                            "location": f"{address:04X}h",
+                            "instruction": f"{prefix_name} CB",
+                            "detail": "reachable indexed rotate/shift/bit instruction",
+                            "bytes": _byte_text(data, index, 4),
+                        }
+                    )
+                elif second in _INDEXED_OPCODES:
+                    hits.append(
+                        {
+                            "kind": "binary",
+                            "confidence": "strong",
+                            "location": f"{address:04X}h",
+                            "instruction": prefix_name,
+                            "detail": f"reachable index-register opcode {second:02X}h",
+                            "bytes": _byte_text(data, index, min(4, len(data) - index)),
+                        }
+                    )
+                # A DD/FD prefix before an unrelated opcode can be ignored by a
+                # Z80 and is not sufficient evidence of IX/IY use. Stop this
+                # uncertain path rather than decoding through it.
                 break
 
             if opcode == 0xED:
