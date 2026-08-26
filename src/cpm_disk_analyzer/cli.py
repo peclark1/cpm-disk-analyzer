@@ -27,6 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--show-files", action="store_true", help="include CP/M directory extents")
     analyze.add_argument("--json", dest="json_path", type=Path, help="write a JSON report")
 
+    scan = subparsers.add_parser(
+        "scan",
+        help="recursively inventory a disk archive and look for Z80-only code",
+    )
+    scan.add_argument("directory", type=Path, help="archive root to scan recursively")
+    scan.add_argument("--csv", dest="csv_path", type=Path, help="write one row per CP/M file")
+    scan.add_argument("--json", dest="json_path", type=Path, help="write the complete archive report")
+
     subparsers.add_parser("profiles", help="list known disk profiles")
     subparsers.add_parser("gui", help="open the desktop GUI")
     return parser
@@ -43,6 +51,22 @@ def main(argv: list[str] | None = None) -> int:
 
         gui_main()
         return 0
+    if args.command == "scan":
+        from .archive_scan import scan_archive, scan_summary_text, write_scan_csv, write_scan_json
+
+        try:
+            report = scan_archive(args.directory)
+        except (OSError, ImageFormatError, KeyError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(scan_summary_text(report))
+        if args.csv_path:
+            write_scan_csv(report, args.csv_path)
+            print(f"\nCSV inventory written to {args.csv_path}")
+        if args.json_path:
+            write_scan_json(report, args.json_path)
+            print(f"JSON report written to {args.json_path}")
+        return 0
 
     try:
         result = analyze_image(args.image, args.profile)
@@ -58,4 +82,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
