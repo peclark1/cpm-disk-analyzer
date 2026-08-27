@@ -21,30 +21,47 @@ SOURCE_SUFFIXES = {".asm", ".mac", ".prn", ".lst", ".inc", ".lib"}
 BINARY_SUFFIXES = {".com"}
 HEX_SUFFIXES = {".hex"}
 
-# These patterns describe instructions/registers that are part of the Z80
-# programming model but not the documented Intel 8080 instruction set.
-_SOURCE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bDJNZ\b", re.I), "DJNZ"),
-    (re.compile(r"\bJR(?:\s|$)", re.I), "JR"),
-    (
-        re.compile(
-            r"\b(?:LDIR|LDDR|LDI|LDD|CPIR|CPDR|CPI|CPD|INIR|INDR|INI|IND|"
-            r"OTIR|OTDR|OUTI|OUTD|EXX|RLD|RRD|RETI|RETN|NEG)\b",
-            re.I,
-        ),
-        "Z80 block/extended instruction",
-    ),
-    (re.compile(r"\bI[XY]\b", re.I), "IX/IY register"),
-    (re.compile(r"\bIM\s+[012]\b", re.I), "Z80 interrupt mode"),
-    (re.compile(r"\bLD\s+(?:A\s*,\s*[IR]|[IR]\s*,\s*A)\b", re.I), "I/R register transfer"),
-    (re.compile(r"\b(?:ADC|SBC)\s+HL\s*,", re.I), "16-bit ADC/SBC HL"),
-    (re.compile(r"\bIN\s+[A-Z]\s*,\s*\(\s*C\s*\)", re.I), "Z80 IN r,(C)"),
-    (re.compile(r"\bOUT\s*\(\s*C\s*\)\s*,", re.I), "Z80 OUT (C),r"),
-)
+_CONFIDENCE_RANK = {"none": 0, "suggestive": 1, "strong": 2, "very strong": 3}
+
+# Used only to locate the opcode field of a source line. The list includes
+# ordinary 8080 mnemonics so that a symbol named like a Z80 mnemonic in an
+# operand (CALL OUTD, OUT OUTD, etc.) cannot be mistaken for an instruction.
+_ASSEMBLY_MNEMONICS = {
+    # Intel 8080
+    "ACI", "ADC", "ADD", "ADI", "ANA", "ANI", "CALL", "CC", "CM", "CMA",
+    "CMC", "CMP", "CNC", "CNZ", "CP", "CPE", "CPI", "CPO", "CZ", "DAA",
+    "DAD", "DCR", "DCX", "DI", "EI", "HLT", "IN", "INR", "INX", "JC",
+    "JM", "JMP", "JNC", "JNZ", "JP", "JPE", "JPO", "JZ", "LDA", "LDAX",
+    "LHLD", "LXI", "MOV", "MVI", "NOP", "ORA", "ORI", "OUT", "PCHL", "POP",
+    "PUSH", "RAL", "RAR", "RC", "RET", "RLC", "RM", "RNC", "RNZ", "RP",
+    "RPE", "RPO", "RRC", "RST", "RZ", "SBB", "SBI", "SHLD", "SPHL", "STA",
+    "STAX", "STC", "SUB", "SUI", "XCHG", "XRA", "XRI", "XTHL",
+    # Z80 mnemonics/forms that matter to source parsing
+    "BIT", "CPD", "CPDR", "CPIR", "DJNZ", "EX", "EXX", "IM", "IND", "INDR",
+    "INI", "INIR", "LD", "LDD", "LDDR", "LDI", "LDIR", "NEG", "OTDR", "OTIR",
+    "OUTD", "OUTI", "RES", "RETI", "RETN", "RL", "RLD", "RR", "RRD", "SET",
+    "SLA", "SLL", "SRA", "SRL", "JR",
+}
+_ASSEMBLER_DIRECTIVES = {
+    "ASEG", "CSEG", "DSEG", "DB", "DEFB", "DEFL", "DEFM", "DEFS", "DEFW",
+    "DS", "DW", "ELSE", "END", "ENDIF", "ENDM", "EQU", "IF", "IFDEF",
+    "IFNDEF", "INCLUDE", "MACRO", "ORG", "PUBLIC", "SET", "TITLE",
+}
+_Z80_BLOCK_MNEMONICS = {
+    "LDIR", "LDDR", "LDI", "LDD", "CPIR", "CPDR", "CPD",
+    "INIR", "INDR", "INI", "IND", "OTIR", "OTDR", "OUTI", "OUTD",
+}
+_Z80_SIMPLE_MNEMONICS = {
+    "DJNZ", "EXX", "RLD", "RRD", "RETI", "RETN", "NEG",
+    "BIT", "RES", "SET", "SLA", "SRA", "SRL", "SLL",
+}
+_LISTING_PREFIX_TOKEN = re.compile(r"^(?:[0-9]+|[0-9A-F]{2,6})$", re.I)
+_REGISTER_IXIY = re.compile(r"(?<![A-Z0-9_])I[XY](?![A-Z0-9_])", re.I)
+_REGISTER_AF_ALT = re.compile(r"\bAF\s*'", re.I)
+
 
 # Flow-control opcodes whose lengths/targets we need to follow from a real
-# entry point. Everything else can safely use the ordinary 8080 instruction
-# length and fall through.
+# entry point. Everything else uses the documented 8080 instruction length.
 _THREE_BYTE = {
     0x01, 0x11, 0x21, 0x31,  # LXI
     0x22, 0x2A, 0x32, 0x3A,  # direct memory
@@ -56,6 +73,7 @@ _THREE_BYTE = {
 _TWO_BYTE = {
     0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x36, 0x3E,  # MVI
     0xC6, 0xCE, 0xD6, 0xDE, 0xE6, 0xEE, 0xF6, 0xFE,  # immediate ALU
+    0xD3, 0xDB,  # OUT port, IN port
 }
 _CONDITIONAL_JUMPS = {0xC2, 0xCA, 0xD2, 0xDA, 0xE2, 0xEA, 0xF2, 0xFA}
 _CONDITIONAL_CALLS = {0xC4, 0xCC, 0xD4, 0xDC, 0xE4, 0xEC, 0xF4, 0xFC}
@@ -70,17 +88,32 @@ _Z80_RELATIVE = {
     0x38: "JR C",
 }
 
-# ED-prefix instructions with clear documented Z80 semantics. This excludes
-# undefined ED combinations, keeping binary evidence intentionally conservative.
+# ED-prefix instructions with clear documented Z80 semantics. Undefined ED
+# combinations are deliberately excluded.
 _KNOWN_ED = {
-    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B,
-    0x4D, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-    0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65,
-    0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71,
-    0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D,
-    0x7E, 0x7F,
+    # IN r,(C) / OUT (C),r
+    0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x78,
+    0x41, 0x49, 0x51, 0x59, 0x61, 0x69, 0x79,
+    # SBC/ADC HL,rr
+    0x42, 0x52, 0x62, 0x72, 0x4A, 0x5A, 0x6A, 0x7A,
+    # 16-bit memory transfers
+    0x43, 0x53, 0x63, 0x73, 0x4B, 0x5B, 0x6B, 0x7B,
+    # NEG, RETN/RETI, interrupt mode, I/R transfers, RRD/RLD
+    0x44, 0x45, 0x4D, 0x46, 0x56, 0x5E, 0x47, 0x4F, 0x57, 0x5F, 0x67, 0x6F,
+    # Block instructions
     0xA0, 0xA1, 0xA2, 0xA3, 0xA8, 0xA9, 0xAA, 0xAB,
     0xB0, 0xB1, 0xB2, 0xB3, 0xB8, 0xB9, 0xBA, 0xBB,
+}
+
+# Documented DD/FD opcodes that genuinely substitute IX/IY or (IX/IY+d).
+# Prefixes before unrelated opcodes (for example FD 03 or FD 1F) are not
+# evidence of index-register use and are deliberately ignored.
+_INDEXED_OPCODES = {
+    0x09, 0x19, 0x21, 0x22, 0x23, 0x29, 0x2A, 0x2B, 0x34, 0x35, 0x36, 0x39,
+    0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E,
+    0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x7E,
+    0x86, 0x8E, 0x96, 0x9E, 0xA6, 0xAE, 0xB6, 0xBE,
+    0xE1, 0xE3, 0xE5, 0xE9, 0xF9,
 }
 
 
@@ -98,28 +131,126 @@ def infer_density(path: Path, root: Path) -> str:
     return "unknown"
 
 
+def _source_instruction(code: str) -> str | None:
+    """Return only the instruction field from an assembler source/listing line."""
+    stripped = code.strip()
+    if not stripped:
+        return None
+    tokens = stripped.replace("\t", " ").split()
+    if not tokens:
+        return None
+
+    def word(token: str) -> str:
+        return token.rstrip(":").upper()
+
+    # A colon always marks the first field as a label.
+    if tokens[0].endswith(":") and len(tokens) >= 2:
+        opcode = word(tokens[1])
+        if opcode in _ASSEMBLER_DIRECTIVES and opcode not in _ASSEMBLY_MNEMONICS:
+            return None
+        return " ".join(tokens[1:])
+
+    # An assembler directive in the second field means the first token is a
+    # label even when the directive's spelling is also a Z80 mnemonic. This is
+    # particularly important for Digital Research source such as "TR SET 1":
+    # SET there assigns an assembler variable; it is not the Z80 bit opcode.
+    if len(tokens) >= 2 and word(tokens[1]) in _ASSEMBLER_DIRECTIVES:
+        return None
+
+    # Plain source: mnemonic/directive first. A directive that is not also a
+    # machine mnemonic is never Z80 evidence.
+    first = word(tokens[0])
+    if first in _ASSEMBLY_MNEMONICS:
+        return " ".join(tokens)
+    if first in _ASSEMBLER_DIRECTIVES:
+        return None
+
+    # Plain source with an unadorned label.
+    if len(tokens) >= 2:
+        second = word(tokens[1])
+        if second in _ASSEMBLY_MNEMONICS:
+            return " ".join(tokens[1:])
+        if second in _ASSEMBLER_DIRECTIVES:
+            return None
+
+    # Common PRN/LST layout: line/address/object bytes followed by source.
+    # Only accept a later mnemonic when every earlier token is numeric/hex-ish;
+    # that prevents symbols in operands from being promoted to mnemonics.
+    for index in range(1, len(tokens)):
+        candidate = word(tokens[index])
+        if candidate not in _ASSEMBLY_MNEMONICS and candidate not in _ASSEMBLER_DIRECTIVES:
+            continue
+        if all(_LISTING_PREFIX_TOKEN.fullmatch(token.rstrip(":")) for token in tokens[:index]):
+            if candidate in _ASSEMBLER_DIRECTIVES and candidate not in _ASSEMBLY_MNEMONICS:
+                return None
+            return " ".join(tokens[index:])
+    return None
+
+
+def _source_hit(instruction: str) -> tuple[str, str] | None:
+    parts = instruction.strip().split(None, 1)
+    if not parts:
+        return None
+    mnemonic = parts[0].upper()
+    operands = parts[1] if len(parts) > 1 else ""
+    upper_operands = operands.upper()
+
+    if mnemonic == "CPI":
+        # Intel 8080 CPI immediate is ordinary 8080 code. Z80 CPI is the
+        # operand-less block compare/increment instruction.
+        if not operands.strip():
+            return "CPI", "Z80 operand-less block compare/increment"
+        return None
+    if mnemonic == "JR":
+        return instruction.strip(), "Z80 relative jump"
+    if mnemonic in _Z80_BLOCK_MNEMONICS:
+        return mnemonic, "Z80 block/extended instruction"
+    if mnemonic in _Z80_SIMPLE_MNEMONICS:
+        return mnemonic, "Z80-only instruction"
+    if mnemonic == "IM" and re.match(r"^\s*[012](?:\s|$)", operands):
+        return instruction.strip(), "Z80 interrupt mode"
+    if _REGISTER_IXIY.search(operands):
+        return instruction.strip(), "IX/IY register"
+    if _REGISTER_AF_ALT.search(operands):
+        return instruction.strip(), "alternate AF register set"
+    if mnemonic == "LD" and re.match(r"^\s*(?:A\s*,\s*[IR]|[IR]\s*,\s*A)(?:\s|$)", upper_operands):
+        return instruction.strip(), "I/R register transfer"
+    if mnemonic in {"ADC", "SBC"} and re.match(r"^\s*HL\s*,", upper_operands):
+        return instruction.strip(), "16-bit ADC/SBC HL"
+    if mnemonic == "IN" and re.match(r"^\s*[A-Z]\s*,\s*\(\s*C\s*\)", upper_operands):
+        return instruction.strip(), "Z80 IN r,(C)"
+    if mnemonic == "OUT" and re.match(r"^\s*\(\s*C\s*\)\s*,", upper_operands):
+        return instruction.strip(), "Z80 OUT (C),r"
+    if mnemonic in {"RL", "RR", "RLC", "RRC"} and operands.strip():
+        # 8080 RLC/RRC are operand-less accumulator instructions; register or
+        # memory operands imply the Z80 CB-prefix form.
+        return instruction.strip(), "Z80 register rotate"
+    return None
+
+
 def source_z80_evidence(data: bytes, *, limit: int = 20) -> list[dict[str, Any]]:
     """Find explicit Z80-only constructs in assembly/listing source text."""
     text = data.rstrip(b"\x1a\x00").decode("latin-1", errors="replace")
     hits: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(text.splitlines(), 1):
-        # A semicolon starts an assembler comment in the source we are studying.
         code = raw_line.split(";", 1)[0]
-        if not code.strip():
+        instruction = _source_instruction(code)
+        if instruction is None:
             continue
-        for pattern, description in _SOURCE_PATTERNS:
-            match = pattern.search(code)
-            if match:
-                hits.append(
-                    {
-                        "kind": "source",
-                        "confidence": "very strong",
-                        "location": f"line {line_number}",
-                        "instruction": match.group(0).strip(),
-                        "detail": description,
-                    }
-                )
-                break
+        found = _source_hit(instruction)
+        if found is None:
+            continue
+        display, description = found
+        hits.append(
+            {
+                "kind": "source",
+                "confidence": "very strong",
+                "location": f"line {line_number}",
+                "instruction": display,
+                "detail": description,
+                "source_line": raw_line.rstrip(),
+            }
+        )
         if len(hits) >= limit:
             break
     return hits
@@ -136,6 +267,10 @@ def _relative_target(address: int, displacement: int) -> int:
     return (address + 2 + signed) & 0xFFFF
 
 
+def _byte_text(data: bytes, index: int, length: int) -> str:
+    return " ".join(f"{value:02X}" for value in data[index : index + length])
+
+
 def binary_z80_evidence(
     data: bytes,
     *,
@@ -143,12 +278,12 @@ def binary_z80_evidence(
     entry_points: Iterable[int] | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Follow reachable code and report documented Z80-only opcodes.
+    """Follow reachable code and report Z80-only opcode evidence.
 
-    This is deliberately not a general-purpose disassembler. It follows the
-    ordinary control-flow constructs needed by CP/M .COM files and boot code,
-    and only reports Z80 prefixes/relative branches reached from a supplied
-    entry point. Bytes that are merely present in embedded data are ignored.
+    The walker uses documented Intel 8080 instruction lengths. Relative-branch
+    bytes are only suggestive because inline data and calculated-return idioms
+    can still make a static 8080 walk enter data. DD/FD/ED/CB evidence is only
+    called strong when the following opcode has documented Z80 semantics.
     """
     if not data:
         return []
@@ -181,37 +316,56 @@ def binary_z80_evidence(
                 hits.append(
                     {
                         "kind": "binary",
-                        "confidence": "strong",
+                        "confidence": "suggestive",
                         "location": f"{address:04X}h",
                         "instruction": mnemonic,
                         "detail": f"reachable Z80 relative-branch opcode {opcode:02X}h",
+                        "bytes": _byte_text(data, index, 2),
                     }
                 )
                 enqueue(target)
-                if opcode == 0x18:  # unconditional JR
+                if opcode == 0x18:
                     break
                 address = (address + 2) & 0xFFFF
                 continue
 
             if opcode in (0xDD, 0xFD):
-                prefix_name = "IX (DDh)" if opcode == 0xDD else "IY (FDh)"
-                next_byte = data[index + 1] if index + 1 < len(data) else None
-                hits.append(
-                    {
-                        "kind": "binary",
-                        "confidence": "strong",
-                        "location": f"{address:04X}h",
-                        "instruction": prefix_name,
-                        "detail": (
-                            "reachable Z80 index-register prefix"
-                            + (f" before opcode {next_byte:02X}h" if next_byte is not None else "")
-                        ),
-                    }
-                )
-                # Prefix instruction lengths are varied. Once the evidence is
-                # established, terminate this path rather than risk a false
-                # downstream decode.
-                break
+                if index + 1 >= len(data):
+                    break
+                second = data[index + 1]
+                if second == 0xCB:
+                    if index + 3 >= len(data):
+                        break
+                    prefix_name = "IX (DD CB)" if opcode == 0xDD else "IY (FD CB)"
+                    hits.append(
+                        {
+                            "kind": "binary",
+                            "confidence": "strong",
+                            "location": f"{address:04X}h",
+                            "instruction": prefix_name,
+                            "detail": "reachable indexed Z80 bit/rotate instruction",
+                            "bytes": _byte_text(data, index, 4),
+                        }
+                    )
+                    break
+                if second in _INDEXED_OPCODES:
+                    prefix_name = "IX (DDh)" if opcode == 0xDD else "IY (FDh)"
+                    hits.append(
+                        {
+                            "kind": "binary",
+                            "confidence": "strong",
+                            "location": f"{address:04X}h",
+                            "instruction": prefix_name,
+                            "detail": f"reachable Z80 index-register prefix before opcode {second:02X}h",
+                            "bytes": _byte_text(data, index, min(4, len(data) - index)),
+                        }
+                    )
+                    break
+                # DD/FD before an opcode that does not use IX/IY is ignored by
+                # the Z80 and is not evidence. Decode the following opcode as an
+                # ordinary instruction rather than reporting the prefix.
+                address += 1
+                continue
 
             if opcode == 0xED:
                 if index + 1 >= len(data):
@@ -225,6 +379,7 @@ def binary_z80_evidence(
                             "location": f"{address:04X}h",
                             "instruction": f"ED {second:02X}",
                             "detail": "reachable documented Z80 ED-prefix instruction",
+                            "bytes": _byte_text(data, index, 2),
                         }
                     )
                 break
@@ -240,6 +395,7 @@ def binary_z80_evidence(
                         "location": f"{address:04X}h",
                         "instruction": f"CB {second:02X}",
                         "detail": "reachable Z80 rotate/shift/bit prefix",
+                        "bytes": _byte_text(data, index, 2),
                     }
                 )
                 break
@@ -356,6 +512,12 @@ def _image_paths(root: Path) -> list[Path]:
     )
 
 
+def _best_confidence(hits: list[dict[str, Any]]) -> str:
+    if not hits:
+        return "none"
+    return max((hit["confidence"] for hit in hits), key=lambda value: _CONFIDENCE_RANK[value])
+
+
 def scan_archive(root: str | Path) -> dict[str, Any]:
     """Recursively inventory recognized CP/M images and inspect code for Z80 use."""
     root_path = Path(root).expanduser().resolve()
@@ -381,6 +543,7 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
             "score": None,
             "file_count": 0,
             "z80_file_count": 0,
+            "z80_strong_file_count": 0,
             "system_z80_evidence": [],
         }
         try:
@@ -403,6 +566,7 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
             profile = get_profile(candidate.profile_id)
             logical_files = group_directory_entries(candidate.files)
             z80_count = 0
+            strong_count = 0
             for logical_file in logical_files:
                 try:
                     payload = extract_logical_file(container.logical_data, profile, logical_file)
@@ -412,8 +576,11 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
                 else:
                     extraction_error = None
                 hits = file_z80_evidence(logical_file.name, payload) if payload else []
+                confidence = _best_confidence(hits)
                 if hits:
                     z80_count += 1
+                if _CONFIDENCE_RANK[confidence] >= _CONFIDENCE_RANK["strong"]:
+                    strong_count += 1
                 files.append(
                     {
                         "image_path": relative,
@@ -427,17 +594,14 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
                         "attributes": logical_file.attribute_text,
                         "sha256": hashlib.sha256(payload).hexdigest() if payload else None,
                         "extraction_error": extraction_error,
-                        "z80_confidence": hits[0]["confidence"] if hits else "none",
+                        "z80_confidence": confidence,
                         "z80_evidence": hits,
                     }
                 )
             image_record["file_count"] = len(logical_files)
             image_record["z80_file_count"] = z80_count
+            image_record["z80_strong_file_count"] = strong_count
 
-            # The region before the CP/M directory contains boot/system tracks
-            # for the currently supported floppy profiles. Only code reachable
-            # from byte zero is considered; embedded operating-system data is
-            # deliberately not linearly searched for opcode-looking bytes.
             logical = to_filesystem_order(container.logical_data, profile)
             system_area = logical[: profile.directory_offset]
             image_record["system_z80_evidence"] = binary_z80_evidence(
@@ -459,6 +623,12 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
         record for record in recognized
         if record["z80_file_count"] or record["system_z80_evidence"]
     ]
+    strong_images = [
+        record for record in recognized
+        if record["z80_strong_file_count"]
+        or any(_CONFIDENCE_RANK[hit["confidence"]] >= _CONFIDENCE_RANK["strong"]
+               for hit in record["system_z80_evidence"])
+    ]
     density_counts = Counter(record["density_bucket"] for record in images)
     summary = {
         "root": str(root_path),
@@ -470,6 +640,11 @@ def scan_archive(root: str | Path) -> dict[str, Any]:
         "unique_file_hashes": len(hash_counts),
         "z80_files": sum(1 for record in files if record["z80_evidence"]),
         "z80_images": len(z80_images),
+        "z80_strong_files": sum(
+            1 for record in files
+            if _CONFIDENCE_RANK[record["z80_confidence"]] >= _CONFIDENCE_RANK["strong"]
+        ),
+        "z80_strong_images": len(strong_images),
         "density_buckets": dict(sorted(density_counts.items())),
     }
     rare_files = [
@@ -503,6 +678,8 @@ def write_scan_csv(report: dict[str, Any], path: str | Path) -> None:
                     **{column: record.get(column) for column in columns if column != "z80_hits"},
                     "z80_hits": "; ".join(
                         f"{hit['location']} {hit['instruction']} ({hit['detail']})"
+                        + (f" bytes={hit['bytes']}" if hit.get("bytes") else "")
+                        + (f" source={hit['source_line']}" if hit.get("source_line") else "")
                         for hit in record["z80_evidence"]
                     ),
                 }
@@ -517,7 +694,8 @@ def scan_summary_text(report: dict[str, Any]) -> str:
         f"{summary['images_unrecognized']} unrecognized",
         f"Files: {summary['logical_files']} logical files, {summary['unique_file_names']} unique names, "
         f"{summary['unique_file_hashes']} unique contents",
-        f"Z80 evidence: {summary['z80_files']} file(s) across {summary['z80_images']} image(s)",
+        f"Z80 evidence: {summary['z80_files']} file(s) across {summary['z80_images']} image(s); "
+        f"{summary['z80_strong_files']} strong file(s) across {summary['z80_strong_images']} image(s)",
     ]
     if summary["density_buckets"]:
         buckets = ", ".join(f"{name}={count}" for name, count in summary["density_buckets"].items())
@@ -529,7 +707,7 @@ def scan_summary_text(report: dict[str, Any]) -> str:
             first = record["z80_evidence"][0]
             lines.append(
                 f"  {record['image_path']}: U{record['user']} {record['name']} - "
-                f"{first['location']} {first['instruction']} [{first['confidence']}]"
+                f"{first['location']} {first['instruction']} [{record['z80_confidence']}]"
             )
     system_images = [record for record in report["images"] if record["system_z80_evidence"]]
     if system_images:

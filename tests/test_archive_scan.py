@@ -36,6 +36,39 @@ HERE:   DJNZ HERE
     assert [hit["location"] for hit in hits] == ["line 3", "line 4", "line 5"]
     assert hits[0]["detail"] == "IX/IY register"
     assert hits[1]["instruction"].upper() == "DJNZ"
+    assert hits[0]["source_line"].strip() == "LD IX,1234H"
+
+
+def test_source_scan_does_not_confuse_8080_cpi_or_symbols_with_z80_mnemonics() -> None:
+    source = b"""\
+        CPI 20H
+OUTD    EQU 10H
+        CALL OUTD
+        OUT OUTD
+        CPI
+        OUTD
+"""
+
+    hits = source_z80_evidence(source)
+
+    assert [hit["location"] for hit in hits] == ["line 5", "line 6"]
+    assert hits[0]["instruction"] == "CPI"
+    assert hits[1]["instruction"] == "OUTD"
+
+
+def test_source_scan_does_not_confuse_set_directive_with_z80_set_instruction() -> None:
+    source = b"""\
+TR      SET     1
+FUNC    SET     FUNC+1
+        SET     1,D
+"""
+
+    hits = source_z80_evidence(source)
+
+    assert len(hits) == 1
+    assert hits[0]["location"] == "line 3"
+    assert hits[0]["instruction"] == "SET"
+    assert hits[0]["source_line"].strip() == "SET     1,D"
 
 
 def test_binary_scan_ignores_unreachable_z80_looking_bytes() -> None:
@@ -49,9 +82,28 @@ def test_binary_scan_ignores_unreachable_z80_looking_bytes() -> None:
     assert len(hits) == 1
     assert hits[0]["location"] == "0107h"
     assert hits[0]["instruction"] == "DJNZ"
+    assert hits[0]["confidence"] == "suggestive"
+    assert hits[0]["bytes"] == "10 FE"
 
 
-def test_binary_scan_reports_reachable_ix_prefix() -> None:
+def test_binary_scan_treats_8080_in_and_out_as_two_byte_instructions() -> None:
+    # The port numbers deliberately equal Z80 relative-branch opcodes. They are
+    # operands of documented 8080 IN/OUT, not executable JR opcodes.
+    in_payload = bytes([0xDB, 0x20, 0xC9])
+    out_payload = bytes([0xD3, 0x18, 0xC9])
+
+    assert binary_z80_evidence(in_payload, origin=0x0100, entry_points=[0x0100]) == []
+    assert binary_z80_evidence(out_payload, origin=0x0100, entry_points=[0x0100]) == []
+
+
+def test_binary_scan_ignores_dd_fd_prefixes_before_unrelated_opcodes() -> None:
+    # These exact patterns appeared in the first archive report. FD 03 and
+    # FD 1F do not use IY; the prefix is ignored by the Z80 for these opcodes.
+    assert binary_z80_evidence(bytes([0xFD, 0x03]), origin=0x0100, entry_points=[0x0100]) == []
+    assert binary_z80_evidence(bytes([0xFD, 0x1F]), origin=0x0100, entry_points=[0x0100]) == []
+
+
+def test_binary_scan_reports_reachable_ix_prefix_as_strong() -> None:
     payload = bytes([0xC3, 0x03, 0x01, 0xDD, 0x21, 0x00, 0x20])
 
     hits = binary_z80_evidence(payload, origin=0x0100, entry_points=[0x0100])
@@ -59,6 +111,8 @@ def test_binary_scan_reports_reachable_ix_prefix() -> None:
     assert len(hits) == 1
     assert hits[0]["location"] == "0103h"
     assert hits[0]["instruction"] == "IX (DDh)"
+    assert hits[0]["confidence"] == "strong"
+    assert hits[0]["bytes"] == "DD 21 00 20"
 
 
 def test_recursive_archive_scan_extracts_files_and_preserves_density_bucket(tmp_path: Path) -> None:
@@ -92,8 +146,11 @@ def test_recursive_archive_scan_extracts_files_and_preserves_density_bucket(tmp_
     assert report["summary"]["images_seen"] == 1
     assert report["summary"]["images_recognized"] == 1
     assert report["summary"]["z80_files"] == 1
+    assert report["summary"]["z80_strong_files"] == 1
+    assert report["summary"]["z80_strong_images"] == 1
     assert report["images"][0]["density_bucket"] == "single"
     assert report["files"][0]["name"] == "Z80TEST.COM"
+    assert report["files"][0]["z80_confidence"] == "strong"
     assert report["files"][0]["z80_evidence"][0]["instruction"] == "IX (DDh)"
 
     csv_path = tmp_path / "inventory.csv"
@@ -101,4 +158,5 @@ def test_recursive_archive_scan_extracts_files_and_preserves_density_bucket(tmp_
     write_scan_csv(report, csv_path)
     write_scan_json(report, json_path)
     assert "Z80TEST.COM" in csv_path.read_text(encoding="utf-8")
+    assert "bytes=DD 21 00 20" in csv_path.read_text(encoding="utf-8")
     assert '"density_bucket": "single"' in json_path.read_text(encoding="utf-8")
