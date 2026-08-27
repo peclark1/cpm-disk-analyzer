@@ -56,6 +56,21 @@ OUTD    EQU 10H
     assert hits[1]["instruction"] == "OUTD"
 
 
+def test_source_scan_does_not_confuse_set_directive_with_z80_set_instruction() -> None:
+    source = b"""\
+TR      SET     1
+FUNC    SET     FUNC+1
+        SET     1,D
+"""
+
+    hits = source_z80_evidence(source)
+
+    assert len(hits) == 1
+    assert hits[0]["location"] == "line 3"
+    assert hits[0]["instruction"] == "SET"
+    assert hits[0]["source_line"].strip() == "SET     1,D"
+
+
 def test_binary_scan_ignores_unreachable_z80_looking_bytes() -> None:
     # 0100: JMP 0107
     # 0103: DD 21 00 00   (unreachable data that looks like LD IX,0000)
